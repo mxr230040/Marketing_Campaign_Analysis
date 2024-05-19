@@ -2,6 +2,15 @@
 library(readr)
 library(dplyr)
 library(ggplot2)
+install.packages("rpart.plot")
+library(rpart.plot)
+# Load necessary libraries
+library(tidyverse)
+library(randomForest)
+library(caret)
+library(ROSE)
+library(rpart)
+library(pROC)
 
 # Read CSV file
 df <- read.csv("ifood_df.csv")
@@ -20,27 +29,80 @@ colMeans(df, na.rm = TRUE)
 # We are dropping these columns since they have a unique value throughout, and hence will not be useful in our analysis
 df <- subset(df, select = -c(Z_CostContact, Z_Revenue))
 
-# Convert columns to categorical variables
-df$Kidhome <- as.factor(df$Kidhome)
-df$Teenhome <- as.factor(df$Teenhome)
-df$AcceptedCmp1 <- as.factor(df$AcceptedCmp1)
-df$AcceptedCmp2 <- as.factor(df$AcceptedCmp2)
-df$AcceptedCmp3 <- as.factor(df$AcceptedCmp3)
-df$AcceptedCmp4 <- as.factor(df$AcceptedCmp4)
-df$AcceptedCmp5 <- as.factor(df$AcceptedCmp5)
-df$Complain <- as.factor(df$Complain)
-df$marital_Divorced <- as.factor(df$marital_Divorced)
-df$marital_Married <- as.factor(df$marital_Married)
-df$marital_Single <- as.factor(df$marital_Single)
-df$marital_Together <- as.factor(df$marital_Together)
-df$marital_Widow <- as.factor(df$marital_Widow)
-df$education_Basic <- as.factor(df$education_Basic)
-df$education_Graduation <- as.factor(df$education_Graduation)
-df$education_Master <- as.factor(df$education_Master)
-df$education_PhD <- as.factor(df$education_PhD)
-
 # Display updated information about the dataframe
 str(df)
+
+columns_to_keep <- c("Recency", "Customer_Days", "AcceptedCmpOverall", "Income", 
+                     "MntRegularProds", "MntTotal", "MntWines", "MntMeatProducts", 
+                     "MntGoldProds", "Age","Response")
+df <- df[, columns_to_keep]
+
+# Splitting data into training and testing sets
+set.seed(123)  # For reproducibility
+index <- createDataPartition(df$Response, p = 0.8, list = FALSE)
+train_data <- df[index,]
+test_data <- df[-index,]
+
+# Oversampling the training data to balance the class distribution
+train_data_balanced <- ovun.sample(Response ~ ., data = train_data, method = "both", p = 0.5, seed = 123)$data
+# Verify the new class distribution
+train_data_balanced$Response <- as.factor(train_data_balanced$Response)
+
+#####
+# Train Logistic Regression
+logistic_model <- glm(Response ~ Recency + Customer_Days + AcceptedCmpOverall + Income + MntRegularProds + MntTotal + MntWines + MntMeatProducts + MntGoldProds + Age
+                      , family = "binomial", data = train_data_balanced)
+
+# Train Decision Tree
+#tree_model <- rpart(Response ~ Recency + Customer_Days + AcceptedCmpOverall + Income + MntRegularProds + MntTotal + MntWines + MntMeatProducts + MntGoldProds + Age
+#                   , data = train_data_balanced)
+tree_model <- rpart(Response ~ Recency + Customer_Days + AcceptedCmpOverall + Income + MntRegularProds + MntTotal + MntWines + MntMeatProducts + MntGoldProds + Age
+                    , data = train_data_balanced, method = "class", cp = 0.01, minsplit = 2, minbucket = 1) 
+
+
+
+# Train the Random Forest model
+rf_model <- randomForest(Response ~ ., data = train_data_balanced, ntree = 100)
+
+
+
+# Predict probabilities on test data
+logistic_pred <- predict(logistic_model, test_data, type = "response")
+logistic_pred_class <- ifelse(logistic_pred > 0.5, 1, 0)
+tree_pred <- predict(tree_model, test_data, type = "class")
+rf_probabilities <- predict(rf_model, test_data, type = "prob")[,2]  # Assuming the second column is for the positive class
+
+# Confusion matrices for each model
+logistic_conf <- confusionMatrix(factor(logistic_pred_class), factor(test_data$Response))
+tree_conf <- confusionMatrix(factor(tree_pred), factor(test_data$Response))
+rf_conf <- confusionMatrix(as.factor(predict(rf_model, test_data, type = "class")), as.factor(test_data$Response))
+#Confusion matrices for :
+print(logistic_conf$table)
+print(tree_conf$table)
+print(rf_conf$table)
+
+
+# Extracting and displaying metrics
+metrics <- function(conf_mat) {
+  data.frame(
+    Accuracy = conf_mat$overall['Accuracy'],
+    Sensitivity = conf_mat$byClass['Sensitivity'],
+    Specificity = conf_mat$byClass['Specificity']
+  )
+}
+
+logistic_metrics <- metrics(logistic_conf)
+tree_metrics <- metrics(tree_conf)
+rf_metrics <- metrics(rf_conf)
+
+# Print the performance metrics
+cat("Logistic Regression Metrics:\n")
+print(logistic_metrics)
+cat("\nDecision Tree Metrics:\n")
+print(tree_metrics)
+cat("\nRandom Forest Metrics:\n")
+print(rf_metrics)
+
 
 # Load required libraries
 library(dplyr)      # For data manipulation
@@ -54,11 +116,6 @@ cluster_data <- df %>%
   select(-Response) # Remove the response variable for clustering
 
 # Standardize numerical variables
-scaled_data <- scale(cluster_data[,c('Income','Recency','MntWines','MntFruits',
-                                     'MntMeatProducts','MntFishProducts','MntSweetProducts',
-                                     'MntGoldProds','NumDealsPurchases','NumWebPurchases',
-                                     'NumWebVisitsMonth','Age','Customer_Days','MntTotal','MntRegularProds')])
-
 scaled_data <- scale(cluster_data)
 
 
